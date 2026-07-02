@@ -60,6 +60,7 @@ class TestFenixMemoryBackend : public ::testing::Test {
     using view_type    = KokkosResilience::View<double**, Layout, memory_space>;
 
     ctx.backend().reset();
+    ctx.backend().clear_checkpoints();
 
     auto e  = std::default_random_engine(0);
     auto ud = std::uniform_real_distribution<double>(-10.0, 10.0);

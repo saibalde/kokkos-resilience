@@ -134,7 +134,10 @@ class FenixMemoryBackend::Impl {
 
 FenixMemoryBackend::Impl::Impl(ContextBase& ctx, MPI_Comm mpi_comm) : m_context(&ctx), m_mpi_comm(mpi_comm) {}
 
-FenixMemoryBackend::Impl::~Impl() { clear_checkpoints(); }
+FenixMemoryBackend::Impl::~Impl() {
+  clear_checkpoints();
+  reset();
+}
 
 void FenixMemoryBackend::Impl::checkpoint(const std::string& label, int version,
                                           const std::unordered_set<Registration>& members) {
@@ -243,14 +246,19 @@ int FenixMemoryBackend::Impl::latest_version(const std::string& label) const noe
   }
 
   const int group_id = label_hash(label);
-  if (m_group_members.find(group_id) == m_group_members.end()) {
+
+  auto group_members_iter = m_group_members.find(group_id);
+  if (group_members_iter == m_group_members.end()) {
+    return -1;
+  }
+
+  auto& group_members = group_members_iter->second;
+  if (group_members.find(member_id_of_version) == group_members.end()) {
     return -1;
   }
 
   const int position   = 0;  // latest snapshot is at position 0
   const int time_stamp = get_time_stamp_of_snapshot_at_position(group_id, label, position);
-
-  assert_data_member_exists(group_id, label, member_id_of_version, "version");
 
   int version;
   restore_data_member(group_id, label, member_id_of_version, "version", time_stamp, &version, sizeof(int));
@@ -269,14 +277,15 @@ void FenixMemoryBackend::Impl::clear_checkpoints() {
     for (auto& member_id : group_members) {
       Fenix_Data_member_delete(group_id, member_id);
     }
-    // Fenix_Data_group_delete(group_id);
+    group_members.clear();
   }
-  m_group_members.clear();
+  // not deleteting data groups to avoid double free in fenix
+}
+
+void FenixMemoryBackend::Impl::reset() {
   m_latest_version.clear();
   m_alias_map.clear();
 }
-
-void FenixMemoryBackend::Impl::reset() { clear_checkpoints(); }
 
 void FenixMemoryBackend::Impl::register_alias(Registration& member, const std::string& alias) {
   m_alias_map.try_emplace(alias, member);
