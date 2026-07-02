@@ -41,7 +41,6 @@
 #ifndef INC_RESILIENCE_FENIX_FENIXBACKEND_HPP
 #define INC_RESILIENCE_FENIX_FENIXBACKEND_HPP
 
-#include <memory>
 #include <string>
 #include <unordered_set>
 
@@ -84,8 +83,26 @@ class FenixMemoryBackend {
   void register_alias(Registration& member, const std::string& alias);
 
  private:
-  class Impl;
-  std::unique_ptr<Impl> p_impl;
+  ContextBase* m_context;
+
+  MPI_Comm m_mpi_comm;
+
+  mutable std::unordered_map<std::string, int> m_latest_version;
+  std::unordered_map<std::string, Registration> m_alias_map;
+
+  // we keep a record of created group ids, and member ids within each group, to enable checking if data group or data
+  // member has already been created
+  std::unordered_map<int, std::unordered_set<int>> m_group_members;
+
+  // we store the version as an extra member in each checkpoint
+  constexpr static int member_id_of_version = 19;
+
+  // for each member, we assign
+  //     member_id = member_id_offset + 2 * static_cast<int>(member_hash) + 1
+  // to store the actual data, and
+  //     member_id = member_id_offset + 2 * static_cast<int>(member_hash)
+  // to store the size of the serialized data
+  constexpr static int member_id_offset = 20;
 };
 
 }  // namespace KokkosResilience
