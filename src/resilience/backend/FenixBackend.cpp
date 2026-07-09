@@ -157,10 +157,9 @@ void restore_data_member(int group_id, const std::string& group_label, int membe
   }
 }
 
-void assert_data_member_exists(const std::unordered_map<int, std::unordered_set<int>>& group_members, int group_id,
-                               const std::string& group_label, int member_id, const std::string& member_label) {
-  const auto& member_ids = group_members.find(group_id)->second;
-  if (member_ids.find(member_id) == member_ids.end()) {
+void assert_data_member_exists(int group_id, const std::string& group_label, int member_id,
+                               const std::string& member_label) {
+  if (not Fenix_Data_member_created(group_id, member_id)) {
     std::ostringstream msg;
     msg << "data member \"" << member_label << "\" in data group \"" << group_label << "\" does not exist";
     report_error(msg.str());
@@ -192,17 +191,14 @@ void FenixMemoryBackend::checkpoint(const std::string& label, int version,
                                     const std::unordered_set<Registration>& members) {
   const int group_id = static_cast<int>(label_hash(label));
 
-  if (m_group_members.find(group_id) == m_group_members.end()) {
+  if (not Fenix_Data_group_created(group_id)) {
     detail::create_data_group(m_mpi_comm, group_id, label);
-    m_group_members.emplace(group_id, std::unordered_set<int>());
+    m_group_ids.emplace(group_id);
   }
 
-  auto& members_list = m_group_members.find(group_id)->second;
-
   // store version information in the checkpoint
-  if (members_list.find(member_id_of_version) == members_list.end()) {
+  if (not Fenix_Data_member_created(group_id, member_id_of_version)) {
     detail::create_data_member(group_id, label, member_id_of_version, "version", &version, sizeof(int));
-    members_list.emplace(member_id_of_version);
   } else {
     detail::update_data_member(group_id, label, member_id_of_version, "version", &version, sizeof(int));
   }
@@ -228,16 +224,14 @@ void FenixMemoryBackend::checkpoint(const std::string& label, int version,
     const int count_id  = member_id_offset + 2 * member_hash;
     const int member_id = count_id + 1;
 
-    if (members_list.find(count_id) == members_list.end()) {
+    if (not Fenix_Data_member_created(group_id, count_id)) {
       detail::create_data_member(group_id, label, count_id, member->name + " count", &count, sizeof(int));
-      members_list.emplace(count_id);
     } else {
       detail::update_data_member(group_id, label, count_id, member->name + " count", &count, sizeof(int));
     }
 
-    if (members_list.find(member_id) == members_list.end()) {
+    if (not Fenix_Data_member_created(group_id, member_id)) {
       detail::create_data_member(group_id, label, member_id, member->name, data, count);
-      members_list.emplace(member_id);
     } else {
       detail::update_data_member(group_id, label, member_id, member->name, data, count);
     }
@@ -254,13 +248,13 @@ void FenixMemoryBackend::checkpoint(const std::string& label, int version,
 void FenixMemoryBackend::restart(const std::string& label, int version, std::unordered_set<Registration>& members) {
   const int group_id = label_hash(label);
 
-  if (m_group_members.find(group_id) == m_group_members.end()) {
+  if (not Fenix_Data_group_created(group_id)) {
     std::ostringstream msg;
     msg << "data group \"" << label << "\" does not exist";
     detail::report_error(msg.str());
   }
 
-  detail::assert_data_member_exists(m_group_members, group_id, label, member_id_of_version, "version");
+  detail::assert_data_member_exists(group_id, label, member_id_of_version, "version");
   int time_stamp;
   {
     int num_snapshot;
@@ -310,8 +304,8 @@ void FenixMemoryBackend::restart(const std::string& label, int version, std::uno
     const int count_id  = member_id_offset + 2 * member_hash;
     const int member_id = count_id + 1;
 
-    detail::assert_data_member_exists(m_group_members, group_id, label, count_id, member->name + " count");
-    detail::assert_data_member_exists(m_group_members, group_id, label, member_id, member->name);
+    detail::assert_data_member_exists(group_id, label, count_id, member->name + " count");
+    detail::assert_data_member_exists(group_id, label, member_id, member->name);
 
     int count;
     detail::restore_data_member(group_id, label, count_id, member->name + " count", time_stamp, &count, sizeof(int));
@@ -334,13 +328,11 @@ int FenixMemoryBackend::latest_version(const std::string& label) const noexcept 
 
   const int group_id = label_hash(label);
 
-  auto group_members_iter = m_group_members.find(group_id);
-  if (group_members_iter == m_group_members.end()) {
+  if (not Fenix_Data_group_created(group_id)) {
     return -1;
   }
 
-  auto& group_members = group_members_iter->second;
-  if (group_members.find(member_id_of_version) == group_members.end()) {
+  if (not Fenix_Data_member_created(group_id, member_id_of_version)) {
     return -1;
   }
 
@@ -360,13 +352,27 @@ bool FenixMemoryBackend::restart_available(const std::string& label, int version
 }
 
 void FenixMemoryBackend::clear_checkpoints() {
-  for (auto& [group_id, group_members] : m_group_members) {
-    for (auto& member_id : group_members) {
+  for (const auto& group_id : m_group_ids) {
+    int num_member;
+    {
+      int status = Fenix_Data_group_get_number_of_members(group_id, &num_member);
+      if (status != FENIX_SUCCESS) {
+      }
+    }
+
+    for (int count = 0; count < num_member; ++count) {
+      int member_id;
+      {
+        int position = 0;
+        int status   = Fenix_Data_group_get_member_at_position(group_id, &member_id, position);
+        if (status != FENIX_SUCCESS) {
+        }
+      }
       Fenix_Data_member_delete(group_id, member_id);
     }
-    group_members.clear();
+
+    // not deleteting data group to avoid double free in fenix
   }
-  // not deleteting data groups to avoid double free in fenix
 }
 
 void FenixMemoryBackend::reset() {

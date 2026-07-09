@@ -90,9 +90,8 @@ class FenixMemoryBackend {
   mutable std::unordered_map<std::string, int> m_latest_version;
   std::unordered_map<std::string, Registration> m_alias_map;
 
-  // we keep a record of created group ids, and member ids within each group, to enable checking if data group or data
-  // member has already been created
-  std::unordered_map<int, std::unordered_set<int>> m_group_members;
+  // we keep a record of which groups have been created
+  std::unordered_set<int> m_group_ids;
 
   // we store the version as an extra member in each checkpoint
   constexpr static int member_id_of_version = 19;
