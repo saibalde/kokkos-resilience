@@ -47,11 +47,37 @@
 
 #include <fenix.h>
 
+#define FENIX_SAFE_CALL(call) KokkosResilience::fenix_safe_call(call, #call, __FILE__, __LINE__)
+
 namespace KokkosResilience {
 
-namespace detail {
+namespace {
 
-void report_error(const std::string& msg) { Kokkos::Impl::throw_runtime_exception(msg); }
+void fenix_throw(const std::string& msg) {
+  Kokkos::Impl::throw_runtime_exception(std::string("KokkosResilience::FenixMemoryBackend::") + msg);
+}
+
+void fenix_safe_call(int status, const char* call, const char* file, int line) {
+  if (status != FENIX_SUCCESS) {
+    std::ostringstream msg;
+    msg << "[fenix error] " << file << ":" << line << " " << call;
+    fenix_throw(msg.str());
+  }
+}
+
+void fenix_create_data_group(MPI_Comm mpi_comm, int group_id) {
+  int mpi_size;
+  MPI_Comm_size(mpi_comm, &mpi_size);
+
+  const int start_time_stamp = 0;
+  const int checkpoint_depth = 0;
+  const int policy_name      = FENIX_DATA_POLICY_IN_MEMORY_RAID;
+  int policy_value[3]        = {1, std::max(1, mpi_size / 2), 0};
+
+  int flag;
+  FENIX_SAFE_CALL(Fenix_Data_group_create(group_id, mpi_comm, start_time_stamp, checkpoint_depth, policy_name,
+                                          policy_value, &flag));
+}
 
 Registration unalias_member(const std::unordered_map<std::string, Registration>& alias_map,
                             const Registration& member) {
@@ -71,114 +97,7 @@ std::unordered_set<Registration> get_unaliased_member_list(
   return unaliased_members;
 }
 
-void create_data_group(MPI_Comm mpi_comm, int group_id, const std::string& group_label) {
-  int mpi_size;
-  MPI_Comm_size(mpi_comm, &mpi_size);
-
-  const int start_time_stamp = 0;
-  const int checkpoint_depth = 0;
-  const int policy_name      = FENIX_DATA_POLICY_IN_MEMORY_RAID;
-  int policy_value[3]        = {1, std::max(1, mpi_size / 2), 0};
-
-  int flag;
-  int status =
-      Fenix_Data_group_create(group_id, mpi_comm, start_time_stamp, checkpoint_depth, policy_name, policy_value, &flag);
-  if (status != FENIX_SUCCESS) {
-    std::ostringstream msg;
-    msg << "failed to create data group \"" << group_label << "\": fenix return code = " << status
-        << ", fenix error flag = " << flag;
-    report_error(msg.str());
-  }
-}
-
-void commit_data_group(int group_id, const std::string& group_label) {
-  int time_stamp;
-  int status = Fenix_Data_commit(group_id, &time_stamp);
-  if (status != FENIX_SUCCESS) {
-    std::ostringstream msg;
-    msg << "failed to commit data group \"" << group_label << "\"; fenix return code = " << status;
-    report_error(msg.str());
-  }
-}
-
-void create_data_member(int group_id, const std::string& group_label, int member_id, const std::string& member_label,
-                        void* data, int count) {
-  int status = Fenix_Data_member_create(group_id, member_id, data, count, MPI_CHAR);
-  if (status != FENIX_SUCCESS) {
-    std::ostringstream msg;
-    msg << "failed to create data member \"" << member_label << "\" in data group \"" << group_label
-        << "\"; fenix return code = " << status;
-    report_error(msg.str());
-  }
-}
-
-void update_data_member(int group_id, const std::string& group_label, int member_id, const std::string& member_label,
-                        void* data, int count) {
-  {
-    int flag;
-    int status = Fenix_Data_member_attr_set(group_id, member_id, FENIX_DATA_MEMBER_ATTRIBUTE_BUFFER, data, &flag);
-    if (status != FENIX_SUCCESS) {
-      std::ostringstream msg;
-      msg << "failed to set buffer attribute of data member \"" << member_label << "\" in data group \"" << group_label
-          << "\"; fenix return code = " << status << ", fenix error flag = " << flag;
-      report_error(msg.str());
-    }
-  }
-  {
-    int flag;
-    int status = Fenix_Data_member_attr_set(group_id, member_id, FENIX_DATA_MEMBER_ATTRIBUTE_COUNT, &count, &flag);
-    if (status != FENIX_SUCCESS) {
-      std::ostringstream msg;
-      msg << "failed to set count attribute of data member \"" << member_label << "\" in data group \"" << group_label
-          << "\"; fenix return code = " << status << ", fenix error flag = " << flag;
-      report_error(msg.str());
-    }
-  }
-}
-
-void store_data_member(int group_id, const std::string& group_label, int member_id, const std::string& member_label) {
-  int status = Fenix_Data_member_store(group_id, member_id, FENIX_DATA_SUBSET_FULL);
-  if (status != FENIX_SUCCESS) {
-    std::ostringstream msg;
-    msg << "failed to store data member \"" << member_label << "\" in data group \"" << group_label
-        << "; fenix return code = " << status;
-    report_error(msg.str());
-  }
-}
-
-void restore_data_member(int group_id, const std::string& group_label, int member_id, const std::string& member_label,
-                         int time_stamp, void* data, int count) {
-  int status = Fenix_Data_member_restore(group_id, member_id, data, count, time_stamp, NULL);
-  if (status != FENIX_SUCCESS) {
-    std::ostringstream msg;
-    msg << "failed to restore data member \"" << member_label << "\" in data group \"" << group_label
-        << "\"; fenix return code = " << status;
-    report_error(msg.str());
-  }
-}
-
-void assert_data_member_exists(int group_id, const std::string& group_label, int member_id,
-                               const std::string& member_label) {
-  if (not Fenix_Data_member_created(group_id, member_id)) {
-    std::ostringstream msg;
-    msg << "data member \"" << member_label << "\" in data group \"" << group_label << "\" does not exist";
-    report_error(msg.str());
-  }
-}
-
-int get_time_stamp_of_snapshot_at_position(int group_id, const std::string& group_label, int position) {
-  int time_stamp;
-  int status = Fenix_Data_group_get_snapshot_at_position(group_id, position, &time_stamp);
-  if (status != FENIX_SUCCESS) {
-    std::ostringstream msg;
-    msg << "failed to retrieve time stamp of snapshot at position " << position << " in data group \"" << group_label
-        << "\"";
-    report_error(msg.str());
-  }
-  return time_stamp;
-}
-
-}  // namespace detail
+}  // namespace
 
 FenixMemoryBackend::FenixMemoryBackend(ContextBase& ctx, MPI_Comm mpi_comm) : m_context(&ctx), m_mpi_comm(mpi_comm) {}
 
@@ -192,20 +111,25 @@ void FenixMemoryBackend::checkpoint(const std::string& label, int version,
   const int group_id = static_cast<int>(label_hash(label));
 
   if (not Fenix_Data_group_created(group_id)) {
-    detail::create_data_group(m_mpi_comm, group_id, label);
+    fenix_create_data_group(m_mpi_comm, group_id);
     m_group_ids.emplace(group_id);
   }
 
   // store version information in the checkpoint
   if (not Fenix_Data_member_created(group_id, member_id_of_version)) {
-    detail::create_data_member(group_id, label, member_id_of_version, "version", &version, sizeof(int));
+    FENIX_SAFE_CALL(Fenix_Data_member_create(group_id, member_id_of_version, &version, sizeof(int), MPI_CHAR));
   } else {
-    detail::update_data_member(group_id, label, member_id_of_version, "version", &version, sizeof(int));
+    int flag;
+    int count = sizeof(int);
+    FENIX_SAFE_CALL(Fenix_Data_member_attr_set(group_id, member_id_of_version, FENIX_DATA_MEMBER_ATTRIBUTE_BUFFER,
+                                               &version, &flag));
+    FENIX_SAFE_CALL(
+        Fenix_Data_member_attr_set(group_id, member_id_of_version, FENIX_DATA_MEMBER_ATTRIBUTE_COUNT, &count, &flag));
   }
 
-  detail::store_data_member(group_id, label, member_id_of_version, "version");
+  FENIX_SAFE_CALL(Fenix_Data_member_store(group_id, member_id_of_version, FENIX_DATA_SUBSET_FULL));
 
-  auto unaliased_members = detail::get_unaliased_member_list(m_alias_map, members);
+  auto unaliased_members = get_unaliased_member_list(m_alias_map, members);
 
   // store actual members alongside their size information
   for (auto&& member : unaliased_members) {
@@ -217,30 +141,39 @@ void FenixMemoryBackend::checkpoint(const std::string& label, int version,
     stream.flush();
 
     char* data = buffer.data();
-    int count  = buffer.size();
+    int length = buffer.size();
 
     const int member_hash = static_cast<int>(member->hash());
 
-    const int count_id  = member_id_offset + 2 * member_hash;
-    const int member_id = count_id + 1;
+    const int length_id = member_id_offset + 2 * member_hash;
+    const int member_id = length_id + 1;
 
-    if (not Fenix_Data_member_created(group_id, count_id)) {
-      detail::create_data_member(group_id, label, count_id, member->name + " count", &count, sizeof(int));
+    if (not Fenix_Data_member_created(group_id, length_id)) {
+      FENIX_SAFE_CALL(Fenix_Data_member_create(group_id, length_id, &length, sizeof(int), MPI_CHAR));
     } else {
-      detail::update_data_member(group_id, label, count_id, member->name + " count", &count, sizeof(int));
+      int flag;
+      int count = sizeof(int);
+      FENIX_SAFE_CALL(
+          Fenix_Data_member_attr_set(group_id, length_id, FENIX_DATA_MEMBER_ATTRIBUTE_BUFFER, &length, &flag));
+      FENIX_SAFE_CALL(
+          Fenix_Data_member_attr_set(group_id, length_id, FENIX_DATA_MEMBER_ATTRIBUTE_COUNT, &count, &flag));
     }
 
     if (not Fenix_Data_member_created(group_id, member_id)) {
-      detail::create_data_member(group_id, label, member_id, member->name, data, count);
+      FENIX_SAFE_CALL(Fenix_Data_member_create(group_id, member_id, data, length, MPI_CHAR));
     } else {
-      detail::update_data_member(group_id, label, member_id, member->name, data, count);
+      int flag;
+      FENIX_SAFE_CALL(Fenix_Data_member_attr_set(group_id, member_id, FENIX_DATA_MEMBER_ATTRIBUTE_BUFFER, data, &flag));
+      FENIX_SAFE_CALL(
+          Fenix_Data_member_attr_set(group_id, member_id, FENIX_DATA_MEMBER_ATTRIBUTE_COUNT, &length, &flag));
     }
 
-    detail::store_data_member(group_id, label, count_id, member->name + " count");
-    detail::store_data_member(group_id, label, member_id, member->name);
+    FENIX_SAFE_CALL(Fenix_Data_member_store(group_id, length_id, FENIX_DATA_SUBSET_FULL));
+    FENIX_SAFE_CALL(Fenix_Data_member_store(group_id, member_id, FENIX_DATA_SUBSET_FULL));
   }
 
-  detail::commit_data_group(group_id, label);
+  int time_stamp;
+  FENIX_SAFE_CALL(Fenix_Data_commit(group_id, &time_stamp));
 
   m_latest_version[label] = version;
 }
@@ -249,38 +182,29 @@ void FenixMemoryBackend::restart(const std::string& label, int version, std::uno
   const int group_id = label_hash(label);
 
   if (not Fenix_Data_group_created(group_id)) {
-    std::ostringstream msg;
-    msg << "data group \"" << label << "\" does not exist";
-    detail::report_error(msg.str());
+    fenix_throw("restart(): data group does not exist");
   }
 
-  detail::assert_data_member_exists(group_id, label, member_id_of_version, "version");
+  if (not Fenix_Data_member_created(group_id, member_id_of_version)) {
+    fenix_throw("restart(): data member does not exist");
+  }
+
   int time_stamp;
   {
     int num_snapshot;
-    {
-      int status = Fenix_Data_group_get_number_of_snapshots(group_id, &num_snapshot);
-      if (status != FENIX_SUCCESS) {
-        std::ostringstream msg;
-        msg << "failed to retrieve number of snapshots in data group \"" << label
-            << "\"; fenix return code = " << status;
-        detail::report_error(msg.str());
-      }
-    }
+    FENIX_SAFE_CALL(Fenix_Data_group_get_number_of_snapshots(group_id, &num_snapshot));
 
     if (num_snapshot == 0) {
-      std::ostringstream msg;
-      msg << "there are no snapshots in data group \"" << label << "\"";
-      detail::report_error(msg.str());
+      fenix_throw("restart(): data group does not contain any snapshots");
     }
 
     int position = 0;
     while (position < num_snapshot) {
-      time_stamp = detail::get_time_stamp_of_snapshot_at_position(group_id, label, position);
+      FENIX_SAFE_CALL(Fenix_Data_group_get_snapshot_at_position(group_id, position, &time_stamp));
 
       int current_version;
-      detail::restore_data_member(group_id, label, member_id_of_version, "version", time_stamp, &current_version,
-                                  sizeof(int));
+      FENIX_SAFE_CALL(
+          Fenix_Data_member_restore(group_id, member_id_of_version, &current_version, sizeof(int), time_stamp, NULL));
 
       if (current_version == version) {
         break;
@@ -290,28 +214,31 @@ void FenixMemoryBackend::restart(const std::string& label, int version, std::uno
     }
 
     if (position == num_snapshot) {
-      std::ostringstream msg;
-      msg << "could not find version " << version << " of snapshot in data group \"" << label;
-      detail::report_error(msg.str());
+      fenix_throw("restart(): requested version not found");
     }
   }
 
-  auto unaliased_members = detail::get_unaliased_member_list(m_alias_map, members);
+  auto unaliased_members = get_unaliased_member_list(m_alias_map, members);
 
   for (auto&& member : unaliased_members) {
     const int member_hash = static_cast<int>(member->hash());
 
-    const int count_id  = member_id_offset + 2 * member_hash;
-    const int member_id = count_id + 1;
+    const int length_id = member_id_offset + 2 * member_hash;
+    const int member_id = length_id + 1;
 
-    detail::assert_data_member_exists(group_id, label, count_id, member->name + " count");
-    detail::assert_data_member_exists(group_id, label, member_id, member->name);
+    if (not Fenix_Data_member_created(group_id, length_id)) {
+      fenix_throw("restart(): data member does not exist");
+    }
 
-    int count;
-    detail::restore_data_member(group_id, label, count_id, member->name + " count", time_stamp, &count, sizeof(int));
+    if (not Fenix_Data_member_created(group_id, member_id)) {
+      fenix_throw("restart(): data member does not exist");
+    }
 
-    std::vector<char> buffer(count);
-    detail::restore_data_member(group_id, label, member_id, member->name, time_stamp, buffer.data(), count);
+    int length;
+    FENIX_SAFE_CALL(Fenix_Data_member_restore(group_id, length_id, &length, sizeof(int), time_stamp, NULL));
+
+    std::vector<char> buffer(length);
+    FENIX_SAFE_CALL(Fenix_Data_member_restore(group_id, member_id, buffer.data(), length, time_stamp, NULL));
 
     boost::iostreams::array_source source(buffer.data(), buffer.size());
     boost::iostreams::stream<decltype(source)> stream(source);
@@ -336,11 +263,12 @@ int FenixMemoryBackend::latest_version(const std::string& label) const noexcept 
     return -1;
   }
 
-  const int position   = 0;  // latest snapshot is at position 0
-  const int time_stamp = detail::get_time_stamp_of_snapshot_at_position(group_id, label, position);
+  const int position = 0;  // latest snapshot is at position 0
+  int time_stamp;
+  FENIX_SAFE_CALL(Fenix_Data_group_get_snapshot_at_position(group_id, position, &time_stamp));
 
   int version;
-  detail::restore_data_member(group_id, label, member_id_of_version, "version", time_stamp, &version, sizeof(int));
+  FENIX_SAFE_CALL(Fenix_Data_member_restore(group_id, member_id_of_version, &version, sizeof(int), time_stamp, NULL));
 
   m_latest_version[label] = version;
 
@@ -354,20 +282,12 @@ bool FenixMemoryBackend::restart_available(const std::string& label, int version
 void FenixMemoryBackend::clear_checkpoints() {
   for (const auto& group_id : m_group_ids) {
     int num_member;
-    {
-      int status = Fenix_Data_group_get_number_of_members(group_id, &num_member);
-      if (status != FENIX_SUCCESS) {
-      }
-    }
+    FENIX_SAFE_CALL(Fenix_Data_group_get_number_of_members(group_id, &num_member));
 
-    for (int count = 0; count < num_member; ++count) {
+    for (int i = 0; i < num_member; ++i) {
       int member_id;
-      {
-        int position = 0;
-        int status   = Fenix_Data_group_get_member_at_position(group_id, &member_id, position);
-        if (status != FENIX_SUCCESS) {
-        }
-      }
+      int position = 0;
+      FENIX_SAFE_CALL(Fenix_Data_group_get_member_at_position(group_id, &member_id, position));
       Fenix_Data_member_delete(group_id, member_id);
     }
 
