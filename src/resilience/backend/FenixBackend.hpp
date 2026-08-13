@@ -92,16 +92,6 @@ class FenixMemoryBackend {
 
   // we keep a record of which groups have been created
   std::unordered_set<int> m_group_ids;
-
-  // we store the version as an extra member in each checkpoint
-  constexpr static int member_id_of_version = 19;
-
-  // for each member, we assign
-  //     member_id = member_id_offset + 2 * static_cast<int>(member_hash) + 1
-  // to store the actual data, and
-  //     member_id = member_id_offset + 2 * static_cast<int>(member_hash)
-  // to store the size of the serialized data
-  constexpr static int member_id_offset = 20;
 };
 
 }  // namespace KokkosResilience

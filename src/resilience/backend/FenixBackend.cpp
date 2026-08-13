@@ -97,6 +97,19 @@ std::unordered_set<Registration> get_unaliased_member_list(
   return unaliased_members;
 }
 
+// we store the version as an extra member in each checkpoint
+// this defines the member id of this extra member
+constexpr static int fenix_member_id_of_version = 19;
+
+// for each member, we assign
+//     member_id = fenix_member_id_offset + 2 * static_cast<int>(member_hash) + 1
+// to store the actual data, and
+//     member_id = fenix_member_id_offset + 2 * static_cast<int>(member_hash)
+// to store the size of the serialized data
+//
+// this offset also ensures that version data member id does not conflict with any other members
+constexpr static int fenix_member_id_offset = 20;
+
 }  // namespace
 
 FenixMemoryBackend::FenixMemoryBackend(ContextBase& ctx, MPI_Comm mpi_comm) : m_context(&ctx), m_mpi_comm(mpi_comm) {}
@@ -116,18 +129,18 @@ void FenixMemoryBackend::checkpoint(const std::string& label, int version,
   }
 
   // store version information in the checkpoint
-  if (not Fenix_Data_member_created(group_id, member_id_of_version)) {
-    FENIX_SAFE_CALL(Fenix_Data_member_create(group_id, member_id_of_version, &version, sizeof(int), MPI_CHAR));
+  if (not Fenix_Data_member_created(group_id, fenix_member_id_of_version)) {
+    FENIX_SAFE_CALL(Fenix_Data_member_create(group_id, fenix_member_id_of_version, &version, sizeof(int), MPI_CHAR));
   } else {
     int flag;
     int count = sizeof(int);
-    FENIX_SAFE_CALL(Fenix_Data_member_attr_set(group_id, member_id_of_version, FENIX_DATA_MEMBER_ATTRIBUTE_BUFFER,
+    FENIX_SAFE_CALL(Fenix_Data_member_attr_set(group_id, fenix_member_id_of_version, FENIX_DATA_MEMBER_ATTRIBUTE_BUFFER,
                                                &version, &flag));
-    FENIX_SAFE_CALL(
-        Fenix_Data_member_attr_set(group_id, member_id_of_version, FENIX_DATA_MEMBER_ATTRIBUTE_COUNT, &count, &flag));
+    FENIX_SAFE_CALL(Fenix_Data_member_attr_set(group_id, fenix_member_id_of_version, FENIX_DATA_MEMBER_ATTRIBUTE_COUNT,
+                                               &count, &flag));
   }
 
-  FENIX_SAFE_CALL(Fenix_Data_member_store(group_id, member_id_of_version, FENIX_DATA_SUBSET_FULL));
+  FENIX_SAFE_CALL(Fenix_Data_member_store(group_id, fenix_member_id_of_version, FENIX_DATA_SUBSET_FULL));
 
   auto unaliased_members = get_unaliased_member_list(m_alias_map, members);
 
@@ -145,7 +158,7 @@ void FenixMemoryBackend::checkpoint(const std::string& label, int version,
 
     const int member_hash = static_cast<int>(member->hash());
 
-    const int length_id = member_id_offset + 2 * member_hash;
+    const int length_id = fenix_member_id_offset + 2 * member_hash;
     const int member_id = length_id + 1;
 
     if (not Fenix_Data_member_created(group_id, length_id)) {
@@ -185,7 +198,7 @@ void FenixMemoryBackend::restart(const std::string& label, int version, std::uno
     fenix_throw("restart(): data group does not exist");
   }
 
-  if (not Fenix_Data_member_created(group_id, member_id_of_version)) {
+  if (not Fenix_Data_member_created(group_id, fenix_member_id_of_version)) {
     fenix_throw("restart(): data member does not exist");
   }
 
@@ -203,8 +216,8 @@ void FenixMemoryBackend::restart(const std::string& label, int version, std::uno
       FENIX_SAFE_CALL(Fenix_Data_group_get_snapshot_at_position(group_id, position, &time_stamp));
 
       int current_version;
-      FENIX_SAFE_CALL(
-          Fenix_Data_member_restore(group_id, member_id_of_version, &current_version, sizeof(int), time_stamp, NULL));
+      FENIX_SAFE_CALL(Fenix_Data_member_restore(group_id, fenix_member_id_of_version, &current_version, sizeof(int),
+                                                time_stamp, NULL));
 
       if (current_version == version) {
         break;
@@ -223,7 +236,7 @@ void FenixMemoryBackend::restart(const std::string& label, int version, std::uno
   for (auto&& member : unaliased_members) {
     const int member_hash = static_cast<int>(member->hash());
 
-    const int length_id = member_id_offset + 2 * member_hash;
+    const int length_id = fenix_member_id_offset + 2 * member_hash;
     const int member_id = length_id + 1;
 
     if (not Fenix_Data_member_created(group_id, length_id)) {
@@ -259,7 +272,7 @@ int FenixMemoryBackend::latest_version(const std::string& label) const noexcept 
     return -1;
   }
 
-  if (not Fenix_Data_member_created(group_id, member_id_of_version)) {
+  if (not Fenix_Data_member_created(group_id, fenix_member_id_of_version)) {
     return -1;
   }
 
@@ -268,7 +281,8 @@ int FenixMemoryBackend::latest_version(const std::string& label) const noexcept 
   FENIX_SAFE_CALL(Fenix_Data_group_get_snapshot_at_position(group_id, position, &time_stamp));
 
   int version;
-  FENIX_SAFE_CALL(Fenix_Data_member_restore(group_id, member_id_of_version, &version, sizeof(int), time_stamp, NULL));
+  FENIX_SAFE_CALL(
+      Fenix_Data_member_restore(group_id, fenix_member_id_of_version, &version, sizeof(int), time_stamp, NULL));
 
   m_latest_version[label] = version;
 
