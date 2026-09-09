@@ -74,3 +74,48 @@ configure_file(data/hdf5_test_config.json data/hdf5_test_config.json COPYONLY)
 configure_file(data/veloc_test.cfg.in data/veloc_test.cfg @ONLY)
 
 target_compile_definitions(resilience_tests PRIVATE KR_TEST_DATADIR="${KR_TEST_DATADIR}")
+
+# fenix tests with process kill
+
+if (KR_ENABLE_FENIX_BACKEND)
+  if (KR_ENABLE_CI_BUILD)
+    set(MPIEXEC_CI_EXTRA_ARGS "--map-by" ":OVERSUBSCRIBE")
+  else ()
+    set(MPIEXEC_CI_EXTRA_ARGS "")
+  endif ()
+
+  add_executable(resilience_fenix_tests
+    TestFenixMemoryBackendWithProcessKill.cpp
+  )
+  target_link_libraries(resilience_fenix_tests PRIVATE resilience fenix MPI::MPI_CXX)
+
+  if (KR_WARNINGS_AS_ERRORS)
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+      target_compile_options(resilience_fenix_tests PRIVATE "-Wall")
+    endif()
+  endif()
+
+  if (KR_WARNINGS_AS_ERRORS)
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+      target_compile_options(resilience_fenix_tests PRIVATE "-Werror")
+    endif()
+  endif()
+
+  if(KR_SERIAL_DEVICE_ENABLED)
+    add_test(
+      NAME "TestFenixMemoryBackendWithProcessKill.np3.serial"
+      COMMAND ${MPIEXEC_EXECUTABLE} -np 3 --with-ft mpi ${MPIEXEC_CI_EXTRA_ARGS} $<TARGET_FILE:resilience_fenix_tests> serial)
+    add_test(
+      NAME "TestFenixMemoryBackendWithProcessKill.np4.serial"
+      COMMAND ${MPIEXEC_EXECUTABLE} -np 4 --with-ft mpi ${MPIEXEC_CI_EXTRA_ARGS} $<TARGET_FILE:resilience_fenix_tests> serial)
+  endif()
+
+  if(KR_OPENMP_DEVICE_ENABLED)
+    add_test(
+      NAME "TestFenixMemoryBackendWithProcessKill.np3.openmp"
+      COMMAND ${MPIEXEC_EXECUTABLE} -np 3 --with-ft mpi ${MPIEXEC_CI_EXTRA_ARGS} $<TARGET_FILE:resilience_fenix_tests> openmp)
+    add_test(
+      NAME "TestFenixMemoryBackendWithProcessKill.np4.openmp"
+      COMMAND ${MPIEXEC_EXECUTABLE} -np 4 --with-ft mpi ${MPIEXEC_CI_EXTRA_ARGS} $<TARGET_FILE:resilience_fenix_tests> openmp)
+  endif()
+endif()

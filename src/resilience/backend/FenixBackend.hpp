@@ -91,7 +91,7 @@ class FenixMemoryBackend {
   std::unordered_map<std::string, Registration> m_alias_map;
 
   // we keep a record of which groups have been created
-  std::unordered_set<int> m_group_ids;
+  mutable std::unordered_set<int> m_group_ids;
 };
 
 }  // namespace KokkosResilience

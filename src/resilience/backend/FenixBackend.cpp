@@ -123,7 +123,12 @@ void FenixMemoryBackend::checkpoint(const std::string& label, int version,
                                     const std::unordered_set<Registration>& members) {
   const int group_id = static_cast<int>(label_hash(label));
 
-  if (not Fenix_Data_group_created(group_id)) {
+  bool group_created_local = Fenix_Data_group_created(group_id);
+
+  bool group_created_all;
+  MPI_Allreduce(&group_created_local, &group_created_all, 1, MPI_C_BOOL, MPI_LAND, m_mpi_comm);
+
+  if (not group_created_all) {
     fenix_create_data_group(m_mpi_comm, group_id);
     m_group_ids.emplace(group_id);
   }
@@ -194,8 +199,21 @@ void FenixMemoryBackend::checkpoint(const std::string& label, int version,
 void FenixMemoryBackend::restart(const std::string& label, int version, std::unordered_set<Registration>& members) {
   const int group_id = label_hash(label);
 
-  if (not Fenix_Data_group_created(group_id)) {
+  bool group_created_local = Fenix_Data_group_created(group_id);
+
+  bool group_created_any;
+  MPI_Allreduce(&group_created_local, &group_created_any, 1, MPI_C_BOOL, MPI_LOR, m_mpi_comm);
+
+  if (not group_created_any) {
     fenix_throw("restart(): data group does not exist");
+  }
+
+  bool group_created_all;
+  MPI_Allreduce(&group_created_local, &group_created_all, 1, MPI_C_BOOL, MPI_LAND, m_mpi_comm);
+
+  if (not group_created_all) {
+    fenix_create_data_group(m_mpi_comm, group_id);
+    m_group_ids.emplace(group_id);
   }
 
   if (not Fenix_Data_member_created(group_id, fenix_member_id_of_version)) {
@@ -268,8 +286,21 @@ int FenixMemoryBackend::latest_version(const std::string& label) const noexcept 
 
   const int group_id = label_hash(label);
 
-  if (not Fenix_Data_group_created(group_id)) {
+  bool group_created_local = Fenix_Data_group_created(group_id);
+
+  bool group_created_any;
+  MPI_Allreduce(&group_created_local, &group_created_any, 1, MPI_C_BOOL, MPI_LOR, m_mpi_comm);
+
+  if (not group_created_any) {
     return -1;
+  }
+
+  bool group_created_all;
+  MPI_Allreduce(&group_created_local, &group_created_all, 1, MPI_C_BOOL, MPI_LAND, m_mpi_comm);
+
+  if (not group_created_all) {
+    fenix_create_data_group(m_mpi_comm, group_id);
+    m_group_ids.emplace(group_id);
   }
 
   if (not Fenix_Data_member_created(group_id, fenix_member_id_of_version)) {
